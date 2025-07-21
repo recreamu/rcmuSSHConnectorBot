@@ -75,7 +75,7 @@ async def user_info(message: Message):
         f"Порт: {data['port']}\n"
         f"Пользователь: {data['username']}\n"
         f"Пароль: {data['password']}\n\n"
-        f"Данные в памяти, сбросятся при перезапуске."
+        f"Данные не сохраняются в постоянной памяти, они будут очищены после перезагрузки бота."
     )
     await message.answer(info, reply_markup=edit_button_kb)
 
