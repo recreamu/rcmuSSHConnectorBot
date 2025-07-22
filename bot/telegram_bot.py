@@ -52,7 +52,7 @@ force_exec_kb = InlineKeyboardMarkup(
 def get_tools_kb(user_id: int) -> ReplyKeyboardMarkup:
     data = user_data.get(user_id, {})
     mode = data.get("input_mode", False)
-    input_button_text = "Ввод✅" if mode else "Ввод⛔"
+    input_button_text = "Сессия: Вкл✅" if mode else "Сессия: Выкл⛔"
     return ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -176,9 +176,9 @@ async def process_new_data_or_continue(message: Message):
     text = message.text
 
     # === Переключатель режима ввода ===
-    if text in ("Ввод⛔", "Ввод✅"):
+    if text in ("Сессия: Выкл⛔", "Сессия: Вкл✅"):
         # Если пытаемся включить ввод — проверяем SSH-подключение
-        if text == "Ввод⛔":
+        if text == "Сессия: Выкл⛔":
             try:
                 conn = await asyncssh.connect(
                     data["ip"],
@@ -191,7 +191,7 @@ async def process_new_data_or_continue(message: Message):
                 process = await conn.create_process(term_type="xterm")
                 active_sessions[uid] = (conn, process)
                 data["input_mode"] = True
-                new_text = "Ввод✅"
+                new_text = "Сессия: Вкл✅"
             except Exception as e:
                 return await message.answer(f"❌ Ошибка SSH-подключения:\n{e}")
         else:
@@ -205,7 +205,7 @@ async def process_new_data_or_continue(message: Message):
                 if conn:
                     conn.close()
                 data["input_mode"] = False
-            new_text = "Ввод⛔"
+            new_text = "Сессия: Выкл⛔"
 
         return await message.answer(
             f"Режим ввода переключён на: {new_text}",
