@@ -167,7 +167,13 @@ async def process_new_data_or_continue(message: Message):
             result = await conn.run(message.text)
             conn.close()
             output = (result.stdout or "") + (result.stderr or "")
-            return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
+            output = output.strip()
+
+            if output:
+                return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
+            else:
+                return await message.answer("📥 Команда выполнена. Вывода нет.")
+
         except Exception as e:
             return await message.answer(f"❌ Ошибка выполнения команды:\n{e}")
 
