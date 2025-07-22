@@ -16,6 +16,8 @@ dp = Dispatcher()
 # ======== Временное хранилище для SSH данных ========
 # ключи: ip, port, username, password, input_mode (bool), editing (bool)
 user_data: dict[int, dict] = {}
+active_sessions = {}  # user_id: SSHClientConnection
+
 
 # ======== Клавиатуры ========
 main_kb = ReplyKeyboardMarkup(
@@ -140,12 +142,16 @@ async def process_new_data_or_continue(message: Message):
                     password=data["password"],
                     known_hosts=None
                 )
-                conn.close()
+                active_sessions[uid] = conn
+                data["input_mode"] = True
+                new_text = "Ввод✅"
             except Exception as e:
                 return await message.answer(f"❌ Ошибка SSH-подключения:\n{e}")
-            data["input_mode"] = True
-            new_text = "Ввод✅"
         else:
+            # выключаем ввод и закрываем соединение
+            conn = active_sessions.pop(uid, None)
+            if conn:
+                conn.close()
             data["input_mode"] = False
             new_text = "Ввод⛔"
 
@@ -156,26 +162,25 @@ async def process_new_data_or_continue(message: Message):
 
     # === Обработка SSH-команд в активном режиме ===
     if data.get("input_mode"):
+        conn = active_sessions.get(uid)
+        if not conn:
+            data["input_mode"] = False
+            return await message.answer("❌ Сессия была прервана. Режим ввода выключен.")
+
         try:
-            conn = await asyncssh.connect(
-                data["ip"],
-                port=int(data["port"]),
-                username=data["username"],
-                password=data["password"],
-                known_hosts=None
-            )
-            result = await conn.run(message.text)
-            conn.close()
+            result = await conn.run(message.text, check=False)
             output = (result.stdout or "") + (result.stderr or "")
             output = output.strip()
 
             if output:
-                return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
+                await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
             else:
-                return await message.answer("📥 Команда выполнена. Вывода нет.")
-
+                await message.answer("📥 Команда выполнена. Вывода нет.")
         except Exception as e:
-            return await message.answer(f"❌ Ошибка выполнения команды:\n{e}")
+            conn.close()
+            active_sessions.pop(uid, None)
+            data["input_mode"] = False
+            await message.answer(f"❌ Ошибка выполнения команды. Ввод выключен:\n{e}")
 
     # В остальных случаях — молчим
     return
