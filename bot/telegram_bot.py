@@ -256,7 +256,9 @@ async def process_new_data_or_continue(message: Message):
                 local = f"/tmp/{uid}_{filename}"
                 await sftp.get(remote_path, local)
 
-            await message.answer_document(FSInputFile(local))
+            await message.answer_document(
+                FSInputFile(path=local, filename=filename)
+            )
 
         except Exception as e:
             await message.answer(f"❌ Ошибка: {e}")
