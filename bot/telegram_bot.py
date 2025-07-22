@@ -322,15 +322,19 @@ async def process_new_data_or_continue(message: Message):
             output = await process.stdout.read(65536)
             output = output.strip()
 
-            # очищаем вывод как раньше...
+            # удаляем ANSI‑последовательности
             output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
             output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
 
-            # 🔥 Получаем новую cwd после любой команды (включая cd)
-            async with conn.start_sftp_client() as sftp:
-                data["current_path"] = await sftp.getcwd()
+            # обновляем текущую директорию **до** отправки
+            try:
+                async with conn.start_sftp_client() as sftp:
+                    data["current_path"] = await sftp.getcwd()
+            except Exception:
+                # если SFTP недоступен, не падаем
+                pass
 
-            # дальше отправляем ответ
+            # теперь шлём ответ
             if output:
                 return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
             else:
