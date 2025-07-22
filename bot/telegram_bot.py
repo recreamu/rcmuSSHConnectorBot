@@ -57,9 +57,9 @@ def get_tools_kb(user_id: int) -> ReplyKeyboardMarkup:
         keyboard=[
             [
                 KeyboardButton(text=input_button_text),
-                KeyboardButton(text="Пусто1"),
-                KeyboardButton(text="Пусто2"),
-                KeyboardButton(text="Пусто3"),
+                KeyboardButton(text="Скачать из текущ. директории"),
+                KeyboardButton(text="Загрузить в текущ. директорию"),
+                KeyboardButton(text="Пусто"),
             ],
             [KeyboardButton(text="Назад")]
         ],
@@ -77,7 +77,10 @@ async def cmd_start(message: Message):
             "username": "user",
             "password": "pass",
             "input_mode": False,
-            "editing": False
+            "editing": False,
+            "current_path": ".",
+            "download_mode": False,
+            "upload_mode": False,
         }
     await message.answer("Добро пожаловать! Используйте кнопки ниже:", reply_markup=main_kb)
 
@@ -117,6 +120,25 @@ async def tools_handler(message: Message):
 async def back_handler(message: Message):
     await message.answer("Главное меню:", reply_markup=main_kb)
 
+@dp.message(F.text == "Скачать из текущ. директории")
+async def start_download_mode(message: Message):
+    uid = message.from_user.id
+    data = user_data[uid]
+    data["download_mode"] = True
+    await message.answer(
+        f"Скачивание из: {data['current_path']}\n"
+        "Введите имя файла для загрузки:"
+    )
+
+@dp.message(F.text == "Загрузить в текущ. директорию")
+async def start_upload_mode(message: Message):
+    uid = message.from_user.id
+    data = user_data[uid]
+    data["upload_mode"] = True
+    await message.answer(
+        f"Загрузка в: {data['current_path']}\n"
+        "Оправьте файл в следующем сообщении:"
+    )
 
 @dp.callback_query(F.data == "force_exec")
 async def force_execute(callback: CallbackQuery):
@@ -144,6 +166,7 @@ async def force_execute(callback: CallbackQuery):
         await callback.message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
     else:
         await callback.message.answer("📥 Команда выполнена, вывода нет.")
+
 
 
 # === НОВЫЙ обработчик: сначала ловим, если пользователь в режиме редактирования ===
@@ -211,6 +234,42 @@ async def process_new_data_or_continue(message: Message):
             f"Режим ввода переключён на: {new_text}",
             reply_markup=get_tools_kb(uid)
         )
+
+    # === загрузка и скачивание ===
+    # Если мы в режиме скачивания, и получил не документ, а имя файла:
+    if data.get("download_mode"):
+        filename = message.text.strip()
+        data["download_mode"] = False
+        try:
+            conn = active_sessions[uid][0]
+            async with conn.start_sftp_client() as sftp:
+                # пробуем скачать во временную папку
+                local = f"/tmp/{uid}_{filename}"
+                await sftp.get(f"{data['current_path']}/{filename}", local)
+            # отправляем файл
+            await message.answer_document(open(local, "rb"))
+        except Exception as e:
+            await message.answer(f"❌ Ошибка: {e}")
+        return
+
+    # Если мы в режиме загрузки, и пришёл документ
+    if data.get("upload_mode"):
+        # если не документ — отменяем
+        if not message.document:
+            data["upload_mode"] = False
+            return await message.answer("Загрузка отменена.")
+        # иначе сохраняем локально и заливаем
+        file = await message.document.download()
+        try:
+            conn = active_sessions[uid][0]
+            async with conn.start_sftp_client() as sftp:
+                await sftp.put(file.name, f"{data['current_path']}/{message.document.file_name}")
+            await message.answer("✅ Файл загружен.")
+        except Exception as e:
+            await message.answer(f"❌ Ошибка: {e}")
+        finally:
+            data["upload_mode"] = False
+        return
 
     # === Обработка SSH-команд в активном режиме (PTY) ===
     if data.get("input_mode"):
