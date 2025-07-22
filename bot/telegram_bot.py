@@ -4,7 +4,7 @@ import re
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputFile
+    InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputFile, FSInputFile
 )
 from aiogram.filters import Command
 
@@ -256,7 +256,8 @@ async def process_new_data_or_continue(message: Message):
                 local = f"/tmp/{uid}_{filename}"
                 await sftp.get(remote_path, local)
 
-            await message.answer_document(InputFile(path=local))
+            await message.answer_document(FSInputFile(local))
+
         except Exception as e:
             await message.answer(f"❌ Ошибка: {e}")
         return
