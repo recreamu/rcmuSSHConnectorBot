@@ -142,7 +142,9 @@ async def process_new_data_or_continue(message: Message):
                     password=data["password"],
                     known_hosts=None
                 )
-                active_sessions[uid] = conn
+                # создаём интерактивный shell (PTY)
+                process = await conn.create_process(term_type="xterm")
+                active_sessions[uid] = (conn, process)
                 data["input_mode"] = True
                 new_text = "Ввод✅"
             except Exception as e:
@@ -151,8 +153,13 @@ async def process_new_data_or_continue(message: Message):
             # выключаем ввод и закрываем соединение
             conn = active_sessions.pop(uid, None)
             if conn:
-                conn.close()
-            data["input_mode"] = False
+                conn, process = active_sessions.pop(uid, (None, None))
+                if process:
+                    process.stdin.write("exit\n")
+                    await process.wait_closed()
+                if conn:
+                    conn.close()
+                data["input_mode"] = False
             new_text = "Ввод⛔"
 
         return await message.answer(
@@ -160,27 +167,36 @@ async def process_new_data_or_continue(message: Message):
             reply_markup=get_tools_kb(uid)
         )
 
-    # === Обработка SSH-команд в активном режиме ===
+    # === Обработка SSH-команд в активном режиме (PTY) ===
     if data.get("input_mode"):
-        conn = active_sessions.get(uid)
-        if not conn:
+        # достаём соединение и процесс из active_sessions
+        session = active_sessions.get(uid)
+        if not session:
             data["input_mode"] = False
             return await message.answer("❌ Сессия была прервана. Режим ввода выключен.")
 
+        conn, process = session
         try:
-            result = await conn.run(message.text, check=False)
-            output = (result.stdout or "") + (result.stderr or "")
+            # шлём команду в shell
+            process.stdin.write(message.text + "\n")
+            await asyncio.sleep(0.1)  # ждём, пока соберётся вывод
+
+            # читаем весь накопившийся вывод
+            output = await process.stdout.read(65536)
             output = output.strip()
 
             if output:
-                await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
+                return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
             else:
-                await message.answer("📥 Команда выполнена. Вывода нет.")
+                return await message.answer("📥 Команда выполнена. Вывода нет.")
         except Exception as e:
+            # при ошибке закрываем сессию
+            process.stdin.write("exit\n")
+            await process.wait_closed()
             conn.close()
             active_sessions.pop(uid, None)
             data["input_mode"] = False
-            await message.answer(f"❌ Ошибка выполнения команды. Ввод выключен:\n{e}")
+            return await message.answer(f"❌ Ошибка выполнения команды. Ввод выключен:\n{e}")
 
     # В остальных случаях — молчим
     return
