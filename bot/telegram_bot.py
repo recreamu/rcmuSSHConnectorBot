@@ -185,14 +185,21 @@ async def process_new_data_or_continue(message: Message):
                 "Неверный формат. Пример:\n192.168.0.1,22,root,qwerty"
             )
         ip, port, user, pwd = parts
-        mode = data.get("input_mode", False)
+        old = user_data[uid]
+        mode = old.get("input_mode", False)
+        cp = old.get("current_path", ".")
+        dl = old.get("download_mode", False)
+        ul = old.get("upload_mode", False)
         user_data[uid] = {
             "ip": ip,
             "port": port,
             "username": user,
             "password": pwd,
             "input_mode": mode,
-            "editing": False
+            "editing": False,
+            "current_path": cp,
+            "download_mode": dl,
+            "upload_mode": ul,
         }
         return await message.answer("✅ Данные обновлены!", reply_markup=main_kb)
 
