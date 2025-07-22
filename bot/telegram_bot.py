@@ -130,6 +130,7 @@ async def start_download_mode(message: Message):
         "Введите имя файла для загрузки:"
     )
 
+
 @dp.message(F.text == "Загрузить в текущ. директорию")
 async def start_upload_mode(message: Message):
     uid = message.from_user.id
@@ -250,16 +251,11 @@ async def process_new_data_or_continue(message: Message):
         try:
             conn = active_sessions[uid][0]
             async with conn.start_sftp_client() as sftp:
-                # берём путь из user_data, а не из SFTP
-                remote_path = f"{data['current_path']}/{filename}"
-
+                remote_path = f"{data['current_path'].rstrip('/')}/{filename}"
                 local = f"/tmp/{uid}_{filename}"
                 await sftp.get(remote_path, local)
 
-            await message.answer_document(
-                FSInputFile(path=local, filename=filename)
-            )
-
+            await message.answer_document(FSInputFile(path=local, filename=filename))
         except Exception as e:
             await message.answer(f"❌ Ошибка: {e}")
         return
@@ -286,72 +282,42 @@ async def process_new_data_or_continue(message: Message):
             data["upload_mode"] = False
         return
 
-    # === Обработка SSH-команд в активном режиме (PTY) ===
+    # === Обработка SSH‑команд в активном режиме PTY ===
     if data.get("input_mode"):
         session = active_sessions.get(uid)
         if not session:
             data["input_mode"] = False
             return await message.answer("❌ Сессия была прервана. Режим ввода выключен.")
 
-        # проверяем «чёрный список»
-        cmd_name = message.text.strip().split()[0]
-        if cmd_name in BLACKLIST and uid not in pending_commands:
-            pending_commands[uid] = message.text
-            return await message.answer(
-                "⚠️ Лучше не использовать эту команду здесь, "
-                "интерфейс редактора не адаптирован под чат. "
-                "Скачайте файл и отредактируйте на своем устройстве.",
-                reply_markup=force_exec_kb
-            )
-
-
-
         conn, process = session
-
-        # внутри блока if data.get("input_mode"):
         cmd = message.text.strip()
 
-        # дальше идёт отправка в PTY
-        process.stdin.write(cmd + "\n")
-
-        try:
-            # шлём команду в shell
-            await asyncio.sleep(0.1)  # ждём, пока соберётся вывод
-
-            # читаем весь накопившийся вывод
-            output = await process.stdout.read(65536)
-            output = output.strip()
-
-            # удаляем ANSI‑последовательности
-            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
-            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
-
-            # обновляем текущую директорию **до** отправки
-            try:
-                async with conn.start_sftp_client() as sftp:
-                    data["current_path"] = await sftp.getcwd()
-            except Exception:
-                # если SFTP недоступен, не падаем
-                pass
-
-            # теперь шлём ответ
-            if output:
-                return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
+        # ——— 1) Обновляем current_path при cd ———
+        if cmd.startswith("cd "):
+            arg = cmd[3:].strip()
+            if arg.startswith("/"):
+                data["current_path"] = arg
             else:
-                return await message.answer("📥 Команда выполнена. Вывода нет.")
+                base = data.get("current_path", "").rstrip("/")
+                if base in ("", "."):
+                    data["current_path"] = arg
+                else:
+                    data["current_path"] = f"{base}/{arg}"
 
+        # ——— 2) Отправляем команду в PTY ———
+        process.stdin.write(cmd + "\n")
+        await asyncio.sleep(0.1)
 
-        except Exception as e:
-            # при ошибке закрываем сессию
-            process.stdin.write("exit\n")
-            await process.wait_closed()
-            conn.close()
-            active_sessions.pop(uid, None)
-            data["input_mode"] = False
-            return await message.answer(f"❌ Ошибка выполнения команды. Ввод выключен:\n{e}")
+        # ——— 3) Читаем вывод и чистим ANSI‑коды ———
+        output = await process.stdout.read(65536)
+        output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
+        output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
 
-    # В остальных случаях — молчим
-    return
+        # ——— 4) Отвечаем пользователю ———
+        if output:
+            return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
+        else:
+            return await message.answer("📥 Команда выполнена. Вывода нет.")
 
 
 # ======== Запуск ========
