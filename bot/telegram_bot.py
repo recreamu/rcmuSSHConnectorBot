@@ -250,12 +250,11 @@ async def process_new_data_or_continue(message: Message):
         try:
             conn = active_sessions[uid][0]
             async with conn.start_sftp_client() as sftp:
-                cwd = await sftp.getcwd()  # <- получаем реальную текущую директорию
-                remote_path = f"{cwd}/{filename}"
+                # берём путь из user_data, а не из SFTP
+                remote_path = f"{data['current_path'].rstrip('/')}/{filename}"
                 local = f"/tmp/{uid}_{filename}"
                 await sftp.get(remote_path, local)
 
-            # отправляем файл
             await message.answer_document(open(local, "rb"))
         except Exception as e:
             await message.answer(f"❌ Ошибка: {e}")
@@ -301,7 +300,26 @@ async def process_new_data_or_continue(message: Message):
                 reply_markup=force_exec_kb
             )
 
+
+
         conn, process = session
+
+        # внутри блока if data.get("input_mode"):
+        cmd = message.text.strip()
+
+        # ① Обработка cd для хранения текущей директории
+        if cmd.startswith("cd "):
+            arg = cmd[3:].strip()
+            if arg.startswith("/"):
+                # абсолютный путь
+                data["current_path"] = arg
+            else:
+                # относительный
+                base = data.get("current_path", "").rstrip("/")
+                data["current_path"] = base + "/" + arg if base else arg
+        # дальше идёт отправка в PTY
+        process.stdin.write(cmd + "\n")
+
         try:
             # шлём команду в shell
             process.stdin.write(message.text + "\n")
