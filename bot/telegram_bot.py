@@ -311,16 +311,6 @@ async def process_new_data_or_continue(message: Message):
         # внутри блока if data.get("input_mode"):
         cmd = message.text.strip()
 
-        # ① Обработка cd для хранения текущей директории
-        if cmd.startswith("cd "):
-            arg = cmd[3:].strip()
-            if arg.startswith("/"):
-                # абсолютный путь
-                data["current_path"] = arg
-            else:
-                # относительный
-                base = data.get("current_path", "").rstrip("/")
-                data["current_path"] = base + "/" + arg if base else arg
         # дальше идёт отправка в PTY
         process.stdin.write(cmd + "\n")
 
@@ -332,22 +322,20 @@ async def process_new_data_or_continue(message: Message):
             output = await process.stdout.read(65536)
             output = output.strip()
 
-            # 1) Удаляем OSC‑последовательности (заголовок терминала)
+            # очищаем вывод как раньше...
             output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
+            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
 
-            # 2) Удаляем стандартные ANSI‑CSI коды (цвет, эффекты)
-            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output)
+            # 🔥 Получаем новую cwd после любой команды (включая cd)
+            async with conn.start_sftp_client() as sftp:
+                data["current_path"] = await sftp.getcwd()
 
+            # дальше отправляем ответ
             if output:
                 return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
             else:
                 return await message.answer("📥 Команда выполнена. Вывода нет.")
 
-            # после очистки output
-            if cmd.startswith("cd "):
-                # по факту меняем dir в shell, узнаём его через SFTP
-                async with conn.start_sftp_client() as sftp:
-                    data["current_path"] = await sftp.getcwd()
 
         except Exception as e:
             # при ошибке закрываем сессию
