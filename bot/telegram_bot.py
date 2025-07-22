@@ -1,5 +1,6 @@
 import asyncio
 import asyncssh
+import re
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
@@ -185,10 +186,14 @@ async def process_new_data_or_continue(message: Message):
             output = await process.stdout.read(65536)
             output = output.strip()
 
-            if output:
-                return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
+            # удаляем ANSI‑последовательности (цвет, курсор и пр.)
+            clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output)
+
+            if clean:
+                return await message.answer(f"<pre>{clean}</pre>", parse_mode="HTML")
             else:
                 return await message.answer("📥 Команда выполнена. Вывода нет.")
+
         except Exception as e:
             # при ошибке закрываем сессию
             process.stdin.write("exit\n")
