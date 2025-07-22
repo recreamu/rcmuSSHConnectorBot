@@ -250,9 +250,11 @@ async def process_new_data_or_continue(message: Message):
         try:
             conn = active_sessions[uid][0]
             async with conn.start_sftp_client() as sftp:
-                # пробуем скачать во временную папку
+                cwd = await sftp.getcwd()  # <- получаем реальную текущую директорию
+                remote_path = f"{cwd}/{filename}"
                 local = f"/tmp/{uid}_{filename}"
-                await sftp.get(f"{data['current_path']}/{filename}", local)
+                await sftp.get(remote_path, local)
+
             # отправляем файл
             await message.answer_document(open(local, "rb"))
         except Exception as e:
@@ -270,7 +272,10 @@ async def process_new_data_or_continue(message: Message):
         try:
             conn = active_sessions[uid][0]
             async with conn.start_sftp_client() as sftp:
-                await sftp.put(file.name, f"{data['current_path']}/{message.document.file_name}")
+                cwd = await sftp.getcwd()
+                remote_path = f"{cwd}/{message.document.file_name}"
+                await sftp.put(file.name, remote_path)
+
             await message.answer("✅ Файл загружен.")
         except Exception as e:
             await message.answer(f"❌ Ошибка: {e}")
