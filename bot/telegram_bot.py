@@ -251,7 +251,8 @@ async def process_new_data_or_continue(message: Message):
             conn = active_sessions[uid][0]
             async with conn.start_sftp_client() as sftp:
                 # берём путь из user_data, а не из SFTP
-                remote_path = f"{data['current_path'].rstrip('/')}/{filename}"
+                remote_path = f"{data['current_path']}/{filename}"
+
                 local = f"/tmp/{uid}_{filename}"
                 await sftp.get(remote_path, local)
 
@@ -322,7 +323,6 @@ async def process_new_data_or_continue(message: Message):
 
         try:
             # шлём команду в shell
-            process.stdin.write(message.text + "\n")
             await asyncio.sleep(0.1)  # ждём, пока соберётся вывод
 
             # читаем весь накопившийся вывод
@@ -339,6 +339,13 @@ async def process_new_data_or_continue(message: Message):
                 return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
             else:
                 return await message.answer("📥 Команда выполнена. Вывода нет.")
+
+            # после очистки output
+            if cmd.startswith("cd "):
+                # по факту меняем dir в shell, узнаём его через SFTP
+                async with conn.start_sftp_client() as sftp:
+                    data["current_path"] = await sftp.getcwd()
+
         except Exception as e:
             # при ошибке закрываем сессию
             process.stdin.write("exit\n")
