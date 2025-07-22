@@ -34,6 +34,21 @@ edit_button_kb = InlineKeyboardMarkup(
     ]
 )
 
+# список «опасных» команд
+BLACKLIST = {'nano', 'vim', 'vi', 'top', 'htop', 'less', 'more'}
+
+# для хранения «отложенных» команд
+pending_commands: dict[int, str] = {}
+
+# клавиатура для принудительного выполнения
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+force_exec_kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="Выполнить в любом случае", callback_data="force_exec")]
+    ]
+)
+
+
 def get_tools_kb(user_id: int) -> ReplyKeyboardMarkup:
     data = user_data.get(user_id, {})
     mode = data.get("input_mode", False)
@@ -101,6 +116,35 @@ async def tools_handler(message: Message):
 @dp.message(F.text == "Назад")
 async def back_handler(message: Message):
     await message.answer("Главное меню:", reply_markup=main_kb)
+
+
+@dp.callback_query(F.data == "force_exec")
+async def force_execute(callback: CallbackQuery):
+    uid = callback.from_user.id
+    cmd = pending_commands.pop(uid, None)
+    await callback.answer()  # убираем «часики»
+    if not cmd:
+        return await callback.message.answer("Нет команды для выполнения.")
+
+    session = active_sessions.get(uid)
+    if not session:
+        return await callback.message.answer("Сессия закрыта, включите ввод заново.")
+
+    conn, process = session
+    # шлём в PTY точно так же, как в основном хендлере:
+    process.stdin.write(cmd + "\n")
+    await asyncio.sleep(0.1)
+    output = await process.stdout.read(65536)
+    # очистка ANSI‑кодов как у вас
+    import re
+    output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
+    output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
+
+    if output:
+        await callback.message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
+    else:
+        await callback.message.answer("📥 Команда выполнена, вывода нет.")
+
 
 # === НОВЫЙ обработчик: сначала ловим, если пользователь в режиме редактирования ===
 @dp.message()
@@ -170,11 +214,21 @@ async def process_new_data_or_continue(message: Message):
 
     # === Обработка SSH-команд в активном режиме (PTY) ===
     if data.get("input_mode"):
-        # достаём соединение и процесс из active_sessions
         session = active_sessions.get(uid)
         if not session:
             data["input_mode"] = False
             return await message.answer("❌ Сессия была прервана. Режим ввода выключен.")
+
+        # проверяем «чёрный список»
+        cmd_name = message.text.strip().split()[0]
+        if cmd_name in BLACKLIST and uid not in pending_commands:
+            pending_commands[uid] = message.text
+            return await message.answer(
+                "⚠️ Лучше не использовать эту команду здесь, "
+                "интерфейс редактора не адаптирован под чат. "
+                "Скачайте файл и отредактируйте на своем устройстве.",
+                reply_markup=force_exec_kb
+            )
 
         conn, process = session
         try:
