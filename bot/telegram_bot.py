@@ -1,6 +1,7 @@
 import asyncio
 import asyncssh
 import re
+import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
@@ -292,17 +293,16 @@ async def process_new_data_or_continue(message: Message):
         conn, process = session
         cmd = message.text.strip()
 
-        # ——— 1) Обновляем current_path при cd ———
+        # ——— 1) Обновляем current_path при cd с нормализацией ———
         if cmd.startswith("cd "):
             arg = cmd[3:].strip()
+            base = data.get("current_path", ".")
             if arg.startswith("/"):
-                data["current_path"] = arg
+                new_path = arg
             else:
-                base = data.get("current_path", "").rstrip("/")
-                if base in ("", "."):
-                    data["current_path"] = arg
-                else:
-                    data["current_path"] = f"{base}/{arg}"
+                new_path = os.path.normpath(os.path.join(base, arg))
+            data["current_path"] = new_path
+
 
         # ——— 2) Отправляем команду в PTY ———
         process.stdin.write(cmd + "\n")
