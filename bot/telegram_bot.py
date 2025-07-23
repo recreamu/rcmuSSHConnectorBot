@@ -129,26 +129,34 @@ async def start_download_mode(message: Message):
     try:
         if uid in active_sessions:
             conn, _ = active_sessions[uid]
-            # Получаем домашнюю директорию пользователя
-            username = data["username"]
-            home_dir = f"/home/{username}"
-            if username == "root":
-                home_dir = "/root"
+            async with conn.create_process(term_type="xterm") as p:
+                p.stdin.write("pwd\n")
+                await asyncio.sleep(0.1)
+                raw_output = await p.stdout.read(1024)
 
-            # Получаем текущий путь через SFTP
-            async with conn.start_sftp_client() as sftp:
-                abs_path = await sftp.getcwd()
-                data["current_path"] = abs_path  # сохраняем полный путь
+                # Удаляем ANSI и системный мусор
+                clean = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
+                clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean)
+                lines = clean.strip().splitlines()
 
-                # Формируем отображаемый путь
-                if abs_path.startswith(home_dir):
-                    # Удаляем домашнюю директорию из пути
-                    display_path = abs_path[len(home_dir):]
-                    # Если получилась пустая строка - это корень домашней директории
-                    display_path = display_path or "/"
+                # Найти первую строку, похожую на путь
+                for line in lines:
+                    if line.startswith("/"):
+                        # Просто удаляем "/root" из начала пути
+                        if line.startswith("/root/"):
+                            # Удаляем "/root" (5 символов)
+                            display_path = line[5:]
+                        elif line == "/root":
+                            # Специальный случай для корня root
+                            display_path = "/"
+                        else:
+                            # Для других путей оставляем как есть
+                            display_path = line
+                        data["current_path"] = line  # сохраняем полный путь
+                        break
                 else:
-                    # Для путей вне домашней директории показываем полный путь
-                    display_path = abs_path
+                    # Если не нашли подходящую строку
+                    display_path = data.get("current_path", "unknown")
     except Exception as e:
         await message.answer(f"⚠️ Не удалось определить путь: {e}")
         # Используем предыдущее значение пути при ошибке
