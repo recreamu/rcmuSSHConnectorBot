@@ -121,6 +121,33 @@ async def tools_handler(message: Message):
 async def back_handler(message: Message):
     await message.answer("Главное меню:", reply_markup=main_kb)
 
+@dp.message(F.text == "Скачать из текущ. директории")
+async def start_download_mode(message: Message):
+    uid = message.from_user.id
+    data = user_data[uid]
+
+    try:
+        if uid in active_sessions:
+            conn, process = active_sessions[uid]
+            process.stdin.write("pwd\n")
+            await asyncio.sleep(0.1)
+            output = await process.stdout.read(1024)
+            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
+            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output)
+            lines = output.strip().splitlines()
+
+            for line in lines:
+                if line.startswith("/"):
+                    data["current_path"] = line.strip()
+                    break
+    except Exception as e:
+        await message.answer(f"⚠️ Не удалось определить путь: {e}")
+
+    data["download_mode"] = True
+    await message.answer(
+        f"Скачивание из: {data['current_path']}\n"
+        "Введите имя файла для загрузки:"
+    )
 
 @dp.message(F.text == "Загрузить в текущ. директорию")
 async def start_upload_mode(message: Message):
@@ -147,39 +174,6 @@ async def start_upload_mode(message: Message):
                     break
 
         display_path = data.get("current_path", ".")
-    except Exception as e:
-        await message.answer(f"⚠️ Не удалось определить путь: {e}")
-        display_path = data.get("current_path", ".")
-
-    data["upload_mode"] = True
-    await message.answer(
-        f"Загрузка в: {display_path}\n"
-        "Оправьте файл в следующем сообщении:"
-    )
-
-
-
-
-
-
-
-
-
-
-
-@dp.message(F.text == "Загрузить в текущ. директорию")
-async def start_upload_mode(message: Message):
-    uid = message.from_user.id
-    data = user_data[uid]
-
-    try:
-        if uid in active_sessions:
-            conn, _ = active_sessions[uid]
-            result = await conn.run("pwd", check=True)
-            data["current_path"] = result.stdout.strip()
-            display_path = data["current_path"]
-        else:
-            display_path = data.get("current_path", ".")
     except Exception as e:
         await message.answer(f"⚠️ Не удалось определить путь: {e}")
         display_path = data.get("current_path", ".")
