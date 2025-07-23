@@ -129,15 +129,26 @@ async def start_download_mode(message: Message):
     try:
         if uid in active_sessions:
             conn, _ = active_sessions[uid]
-            # Получаем абсолютный путь через SFTP
+            # Получаем домашнюю директорию пользователя
+            username = data["username"]
+            home_dir = f"/home/{username}"
+            if username == "root":
+                home_dir = "/root"
+
+            # Получаем текущий путь через SFTP
             async with conn.start_sftp_client() as sftp:
                 abs_path = await sftp.getcwd()
-                # Формируем отображаемый путь (без первого слеша)
-                if abs_path == "/":
-                    display_path = "/"  # Специальный случай для корня
+                data["current_path"] = abs_path  # сохраняем полный путь
+
+                # Формируем отображаемый путь
+                if abs_path.startswith(home_dir):
+                    # Удаляем домашнюю директорию из пути
+                    display_path = abs_path[len(home_dir):]
+                    # Если получилась пустая строка - это корень домашней директории
+                    display_path = display_path or "/"
                 else:
-                    display_path = abs_path[1:]  # Убираем первый слеш
-                data["current_path"] = abs_path  # Сохраняем полный путь для операций
+                    # Для путей вне домашней директории показываем полный путь
+                    display_path = abs_path
     except Exception as e:
         await message.answer(f"⚠️ Не удалось определить путь: {e}")
         # Используем предыдущее значение пути при ошибке
