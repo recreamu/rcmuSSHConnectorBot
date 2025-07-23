@@ -146,11 +146,11 @@ async def start_download_mode(message: Message):
                     # Сохраняем полный путь для операций
                     data["current_path"] = line.strip()
 
-                    # Формируем отображаемый путь: удаляем "/root"
+                    # Формируем отображаемый путь: удаляем "/root/"
                     if line.startswith("/root/"):
-                        display_path = line[5:]  # удаляем первые 5 символов ("/root")
+                        display_path = line[6:]  # удаляем первые 6 символов ("/root/")
                     elif line == "/root":
-                        display_path = "/"
+                        display_path = "."  # текущая директория
                     else:
                         display_path = line
                     break
