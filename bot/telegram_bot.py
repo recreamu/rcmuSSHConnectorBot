@@ -1,13 +1,13 @@
 import asyncio
 import asyncssh
 import re
-import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputFile, FSInputFile
 )
 from aiogram.filters import Command
+from tempfile import NamedTemporaryFile
 
 from botToken import TOKEN
 
@@ -122,17 +122,21 @@ async def back_handler(message: Message):
     await message.answer("Главное меню:", reply_markup=main_kb)
 
 
-@dp.message(F.text == "Скачать из текущ. директории")
-async def start_download_mode(message: Message):
+@dp.message(F.text == "Загрузить в текущ. директорию")
+async def start_upload_mode(message: Message):
     uid = message.from_user.id
     data = user_data[uid]
 
     try:
         if uid in active_sessions:
             conn, process = active_sessions[uid]
+
+            # отправляем команду в уже активную сессию PTY
             process.stdin.write("pwd\n")
             await asyncio.sleep(0.1)
             output = await process.stdout.read(1024)
+
+            # чистим от лишнего
             output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
             output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output)
             lines = output.strip().splitlines()
@@ -141,14 +145,18 @@ async def start_download_mode(message: Message):
                 if line.startswith("/"):
                     data["current_path"] = line.strip()
                     break
+
+        display_path = data.get("current_path", ".")
     except Exception as e:
         await message.answer(f"⚠️ Не удалось определить путь: {e}")
+        display_path = data.get("current_path", ".")
 
-    data["download_mode"] = True
+    data["upload_mode"] = True
     await message.answer(
-        f"Скачивание из: {data['current_path']}\n"
-        "Введите имя файла для загрузки:"
+        f"Загрузка в: {display_path}\n"
+        "Оправьте файл в следующем сообщении:"
     )
+
 
 
 
@@ -166,26 +174,22 @@ async def start_upload_mode(message: Message):
 
     try:
         if uid in active_sessions:
-            conn, process = active_sessions[uid]
-            process.stdin.write("pwd\n")
-            await asyncio.sleep(0.1)
-            output = await process.stdout.read(1024)
-            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
-            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output)
-            lines = output.strip().splitlines()
-
-            for line in lines:
-                if line.startswith("/"):
-                    data["current_path"] = line.strip()
-                    break
+            conn, _ = active_sessions[uid]
+            result = await conn.run("pwd", check=True)
+            data["current_path"] = result.stdout.strip()
+            display_path = data["current_path"]
+        else:
+            display_path = data.get("current_path", ".")
     except Exception as e:
         await message.answer(f"⚠️ Не удалось определить путь: {e}")
+        display_path = data.get("current_path", ".")
 
     data["upload_mode"] = True
     await message.answer(
-        f"Загрузка в: {data['current_path']}\n"
+        f"Загрузка в: {display_path}\n"
         "Оправьте файл в следующем сообщении:"
     )
+
 
 
 @dp.callback_query(F.data == "force_exec")
@@ -315,12 +319,18 @@ async def process_new_data_or_continue(message: Message):
             data["upload_mode"] = False
             return await message.answer("Загрузка отменена.")
 
-        file = await message.document.download()
         try:
+            file_info = await bot.get_file(message.document.file_id)
+            file_bytes = await bot.download_file(file_info.file_path)
+
+            with NamedTemporaryFile(delete=False) as tmp_file:
+                tmp_file.write(file_bytes.read())
+                tmp_file_path = tmp_file.name
+
             conn = active_sessions[uid][0]
             async with conn.start_sftp_client() as sftp:
                 remote_path = f"{data['current_path'].rstrip('/')}/{message.document.file_name}"
-                await sftp.put(file.name, remote_path)
+                await sftp.put(tmp_file_path, remote_path)
 
             await message.answer("✅ Файл загружен.")
         except Exception as e:
@@ -328,7 +338,6 @@ async def process_new_data_or_continue(message: Message):
         finally:
             data["upload_mode"] = False
         return
-
 
     # === Обработка SSH‑команд в активном режиме PTY ===
     if data.get("input_mode"):
