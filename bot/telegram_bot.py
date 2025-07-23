@@ -135,24 +135,30 @@ async def start_download_mode(message: Message):
                 await asyncio.sleep(0.1)
                 raw_output = await p.stdout.read(1024)
 
-                # Удаляем ANSI и системный мусор
+                # Удаляем ANSI-последовательности
                 clean = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
                 clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean)
                 lines = clean.strip().splitlines()
 
-                # Найти первую строку, похожую на путь
+                # Ищем строку с путём
                 for line in lines:
                     if line.startswith("/"):
-                        # Формируем отображаемый путь
-                        if line.startswith("/root/"):
-                            display_path = line[6:]  # удаляем "/root/"
-                        elif line == "/root":
-                            display_path = "."  # текущая директория
+                        full_path = line.strip()
+
+                        # Сохраняем текущий путь (для скачивания)
+                        data["current_path"] = full_path
+
+                        # Формируем путь для отображения (удаляем /root)
+                        if full_path.startswith("/root/"):
+                            display_path = full_path[6:]
+                        elif full_path == "/root":
+                            display_path = "."
                         else:
-                            display_path = line
+                            display_path = full_path
                         break
                 else:
                     display_path = data.get("current_path", "unknown")
+
     except Exception as e:
         await message.answer(f"⚠️ Не удалось определить путь: {e}")
         display_path = data.get("current_path", "unknown")
@@ -162,6 +168,7 @@ async def start_download_mode(message: Message):
         f"Скачивание из: {display_path}\n"
         "Введите имя файла для загрузки:"
     )
+
 
 
 
