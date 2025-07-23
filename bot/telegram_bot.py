@@ -125,27 +125,35 @@ async def back_handler(message: Message):
 async def start_download_mode(message: Message):
     uid = message.from_user.id
     data = user_data[uid]
-    session = active_sessions.get(uid)
 
-    # Попробуем получить текущую директорию через `pwd`
-    if session:
-        conn, process = session
+    # Пытаемся получить реальную директорию с помощью команды pwd
+    if uid in active_sessions:
+        conn, process = active_sessions[uid]
         try:
             process.stdin.write("pwd\n")
             await asyncio.sleep(0.1)
-            output = await process.stdout.read(65536)
-            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
-            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
-            if output:
-                data["current_path"] = output
-        except Exception:
-            pass  # В случае ошибки не трогаем старое значение
+            raw_output = await process.stdout.read(4096)
+
+            # Удаляем ANSI-последовательности и prompt'ы
+            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
+            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output)
+            lines = output.strip().splitlines()
+
+            # Находим первую строку, похожую на абсолютный путь
+            for line in lines:
+                if line.startswith("/"):
+                    data["current_path"] = line.strip()
+                    break
+
+        except Exception as e:
+            await message.answer(f"❌ Не удалось получить путь через pwd: {e}")
 
     data["download_mode"] = True
     await message.answer(
         f"Скачивание из: {data['current_path']}\n"
         "Введите имя файла для загрузки:"
     )
+
 
 
 
