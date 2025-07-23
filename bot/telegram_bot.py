@@ -127,40 +127,34 @@ async def start_download_mode(message: Message):
     uid = message.from_user.id
     data = user_data[uid]
 
-    # Пытаемся получить реальную директорию с помощью команды pwd
-    if uid in active_sessions:
-        conn, process = active_sessions[uid]
-        try:
-            process.stdin.write("pwd\n")
-            await asyncio.sleep(0.1)
-            raw_output = await process.stdout.read(4096)
+    try:
+        if uid in active_sessions:
+            conn, process = active_sessions[uid]
+            async with conn.create_process(term_type="xterm") as p:
+                p.stdin.write("pwd\n")
+                await asyncio.sleep(0.1)
+                raw_output = await p.stdout.read(1024)
 
-            # Удаляем ANSI-последовательности и prompt'ы
-            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
-            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output)
-            lines = output.strip().splitlines()
+                # Удаляем ANSI и системный мусор
+                clean = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
+                clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean)
+                lines = clean.strip().splitlines()
 
-            # Находим первую строку, похожую на абсолютный путь
-            for line in lines:
-                if line.startswith("/"):
-                    # Сохраняем полный путь для операций
-                    data["current_path"] = line.strip()
-
-                    # Формируем отображаемый путь: удаляем "/root/"
-                    if line.startswith("/root/"):
-                        display_path = line[6:]  # удаляем первые 6 символов ("/root/")
-                    elif line == "/root":
-                        display_path = "."  # текущая директория
-                    else:
-                        display_path = line
-                    break
-            else:
-                # Если не нашли путь, используем предыдущее значение
-                display_path = data.get("current_path", "unknown")
-        except Exception as e:
-            await message.answer(f"❌ Не удалось получить путь через pwd: {e}")
-            display_path = data.get("current_path", "unknown")
-    else:
+                # Найти первую строку, похожую на путь
+                for line in lines:
+                    if line.startswith("/"):
+                        # Формируем отображаемый путь
+                        if line.startswith("/root/"):
+                            display_path = line[6:]  # удаляем "/root/"
+                        elif line == "/root":
+                            display_path = "."  # текущая директория
+                        else:
+                            display_path = line
+                        break
+                else:
+                    display_path = data.get("current_path", "unknown")
+    except Exception as e:
+        await message.answer(f"⚠️ Не удалось определить путь: {e}")
         display_path = data.get("current_path", "unknown")
 
     data["download_mode"] = True
