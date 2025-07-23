@@ -127,26 +127,34 @@ async def start_download_mode(message: Message):
     data = user_data[uid]
 
     # Пытаемся получить реальную директорию с помощью команды pwd
-    if uid in active_sessions:
-        conn, process = active_sessions[uid]
-        try:
-            process.stdin.write("pwd\n")
-            await asyncio.sleep(0.1)
-            raw_output = await process.stdout.read(4096)
+    # Попробуем получить директорию через SFTP напрямую
+    try:
+        if uid in active_sessions:
+            conn, _ = active_sessions[uid]
+            async with conn.create_process(term_type="xterm") as p:
+                p.stdin.write("pwd\n")
+                await asyncio.sleep(0.1)
+                raw_output = await p.stdout.read(1024)
 
-            # Удаляем ANSI-последовательности и prompt'ы
-            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
-            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output)
-            lines = output.strip().splitlines()
+                # Удаляем ANSI и системный мусор
+                clean = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
+                clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean)
+                lines = clean.strip().splitlines()
 
-            # Находим первую строку, похожую на абсолютный путь
-            for line in lines:
-                if line.startswith("/"):
-                    data["current_path"] = line.strip()
-                    break
-
-        except Exception as e:
-            await message.answer(f"❌ Не удалось получить путь через pwd: {e}")
+                # Найти первую строку, похожую на путь
+                for line in lines:
+                    if line.startswith("/"):
+                        # Удаляем лишний префикс
+                        # Например: /root/discord-bot → discord-bot
+                        # Или: /home/user/dir → user/dir
+                        parts = line.strip().split("/")
+                        if len(parts) >= 2:
+                            data["current_path"] = "/" + "/".join(parts[2:])  # пропускаем пустой и root
+                        else:
+                            data["current_path"] = line.strip()
+                        break
+    except Exception as e:
+        await message.answer(f"⚠️ Не удалось определить путь: {e}")
 
     data["download_mode"] = True
     await message.answer(
