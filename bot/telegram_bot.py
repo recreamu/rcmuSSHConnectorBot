@@ -125,11 +125,29 @@ async def back_handler(message: Message):
 async def start_download_mode(message: Message):
     uid = message.from_user.id
     data = user_data[uid]
+    session = active_sessions.get(uid)
+
+    # Попробуем получить текущую директорию через `pwd`
+    if session:
+        conn, process = session
+        try:
+            process.stdin.write("pwd\n")
+            await asyncio.sleep(0.1)
+            output = await process.stdout.read(65536)
+            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
+            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
+            if output:
+                data["current_path"] = output
+        except Exception:
+            pass  # В случае ошибки не трогаем старое значение
+
     data["download_mode"] = True
     await message.answer(
         f"Скачивание из: {data['current_path']}\n"
         "Введите имя файла для загрузки:"
     )
+
+
 
 
 @dp.message(F.text == "Загрузить в текущ. директорию")
@@ -249,8 +267,19 @@ async def process_new_data_or_continue(message: Message):
     if data.get("download_mode"):
         filename = message.text.strip()
         data["download_mode"] = False
+
         try:
-            conn = active_sessions[uid][0]
+            conn, process = active_sessions[uid]
+
+            # 🔄 Тихо обновляем current_path через pwd
+            process.stdin.write("pwd\n")
+            await asyncio.sleep(0.1)
+            output = await process.stdout.read(65536)
+            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
+            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
+            if output:
+                data["current_path"] = output
+
             async with conn.start_sftp_client() as sftp:
                 remote_path = f"{data['current_path'].rstrip('/')}/{filename}"
                 local = f"/tmp/{uid}_{filename}"
@@ -293,27 +322,41 @@ async def process_new_data_or_continue(message: Message):
         conn, process = session
         cmd = message.text.strip()
 
-        # ——— 1) Обновляем current_path при cd с нормализацией ———
-        if cmd.startswith("cd "):
-            arg = cmd[3:].strip()
-            base = data.get("current_path", ".")
-            if arg.startswith("/"):
-                new_path = arg
-            else:
-                new_path = os.path.normpath(os.path.join(base, arg))
-            data["current_path"] = new_path
+        # ——— Проверка на опасные команды ———
+        cmd_name = cmd.split()[0]
+        if cmd_name in BLACKLIST and uid not in pending_commands:
+            pending_commands[uid] = cmd
+            return await message.answer(
+                "⚠️ Лучше не использовать эту команду здесь, "
+                "интерфейс редактора не адаптирован под чат. "
+                "Скачайте файл и отредактируйте на своём устройстве.",
+                reply_markup=force_exec_kb
+            )
 
+        # 1) Если это cd — отправляем в PTY и затем делаем pwd для уточнения
+        is_cd = cmd.startswith("cd ")
 
-        # ——— 2) Отправляем команду в PTY ———
         process.stdin.write(cmd + "\n")
         await asyncio.sleep(0.1)
 
-        # ——— 3) Читаем вывод и чистим ANSI‑коды ———
+        # 2) Читаем вывод после основной команды
         output = await process.stdout.read(65536)
         output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
         output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
 
-        # ——— 4) Отвечаем пользователю ———
+        # 3) Если это была команда cd, узнаем pwd и обновим current_path
+        if is_cd:
+            process.stdin.write("pwd\n")
+            await asyncio.sleep(0.1)
+            pwd_output = await process.stdout.read(65536)
+            pwd_output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', pwd_output)
+            pwd_output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', pwd_output).strip()
+
+            # Уточняем текущую директорию
+            if pwd_output:
+                data["current_path"] = pwd_output
+
+        # 4) Отправляем ответ пользователю
         if output:
             return await message.answer(f"<pre>{output}</pre>", parse_mode="HTML")
         else:
