@@ -126,39 +126,26 @@ async def start_download_mode(message: Message):
     uid = message.from_user.id
     data = user_data[uid]
 
-    # Пытаемся получить реальную директорию с помощью команды pwd
-    # Попробуем получить директорию через SFTP напрямую
     try:
         if uid in active_sessions:
             conn, _ = active_sessions[uid]
-            async with conn.create_process(term_type="xterm") as p:
-                p.stdin.write("pwd\n")
-                await asyncio.sleep(0.1)
-                raw_output = await p.stdout.read(1024)
-
-                # Удаляем ANSI и системный мусор
-                clean = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
-                clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean)
-                lines = clean.strip().splitlines()
-
-                # Найти первую строку, похожую на путь
-                for line in lines:
-                    if line.startswith("/"):
-                        # Удаляем лишний префикс
-                        # Например: /root/discord-bot → discord-bot
-                        # Или: /home/user/dir → user/dir
-                        parts = line.strip().split("/")
-                        if len(parts) >= 2:
-                            data["current_path"] = "/" + "/".join(parts[2:])  # пропускаем пустой и root
-                        else:
-                            data["current_path"] = line.strip()
-                        break
+            # Получаем абсолютный путь через SFTP
+            async with conn.start_sftp_client() as sftp:
+                abs_path = await sftp.getcwd()
+                # Формируем отображаемый путь (без первого слеша)
+                if abs_path == "/":
+                    display_path = "/"  # Специальный случай для корня
+                else:
+                    display_path = abs_path[1:]  # Убираем первый слеш
+                data["current_path"] = abs_path  # Сохраняем полный путь для операций
     except Exception as e:
         await message.answer(f"⚠️ Не удалось определить путь: {e}")
+        # Используем предыдущее значение пути при ошибке
+        display_path = data.get("current_path", "unknown")
 
     data["download_mode"] = True
     await message.answer(
-        f"Скачивание из: {data['current_path']}\n"
+        f"Скачивание из: {display_path}\n"
         "Введите имя файла для загрузки:"
     )
 
