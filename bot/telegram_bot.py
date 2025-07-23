@@ -163,11 +163,30 @@ async def start_download_mode(message: Message):
 async def start_upload_mode(message: Message):
     uid = message.from_user.id
     data = user_data[uid]
+
+    try:
+        if uid in active_sessions:
+            conn, process = active_sessions[uid]
+            process.stdin.write("pwd\n")
+            await asyncio.sleep(0.1)
+            output = await process.stdout.read(1024)
+            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
+            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output)
+            lines = output.strip().splitlines()
+
+            for line in lines:
+                if line.startswith("/"):
+                    data["current_path"] = line.strip()
+                    break
+    except Exception as e:
+        await message.answer(f"⚠️ Не удалось определить путь: {e}")
+
     data["upload_mode"] = True
     await message.answer(
         f"Загрузка в: {data['current_path']}\n"
         "Оправьте файл в следующем сообщении:"
     )
+
 
 @dp.callback_query(F.data == "force_exec")
 async def force_execute(callback: CallbackQuery):
@@ -292,17 +311,15 @@ async def process_new_data_or_continue(message: Message):
 
     # Если мы в режиме загрузки, и пришёл документ
     if data.get("upload_mode"):
-        # если не документ — отменяем
         if not message.document:
             data["upload_mode"] = False
             return await message.answer("Загрузка отменена.")
-        # иначе сохраняем локально и заливаем
+
         file = await message.document.download()
         try:
             conn = active_sessions[uid][0]
             async with conn.start_sftp_client() as sftp:
-                cwd = await sftp.getcwd()
-                remote_path = f"{cwd}/{message.document.file_name}"
+                remote_path = f"{data['current_path'].rstrip('/')}/{message.document.file_name}"
                 await sftp.put(file.name, remote_path)
 
             await message.answer("✅ Файл загружен.")
@@ -311,6 +328,7 @@ async def process_new_data_or_continue(message: Message):
         finally:
             data["upload_mode"] = False
         return
+
 
     # === Обработка SSH‑команд в активном режиме PTY ===
     if data.get("input_mode"):
