@@ -131,26 +131,25 @@ async def start_download_mode(message: Message):
         if uid in active_sessions:
             conn, process = active_sessions[uid]
             process.stdin.write("pwd\n")
-            await asyncio.sleep(0.2)
-            raw_output = await process.stdout.read(1024)
+            await asyncio.sleep(0.1)
+            output = await process.stdout.read(1024)
+            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
+            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output)
+            lines = output.strip().splitlines()
 
-            # Чистим ANSI и вывод
-            clean = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
-            clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean).strip()
-
-            # Берём первую строку, начинающуюся с /
-            for line in clean.splitlines():
+            for line in lines:
                 if line.startswith("/"):
                     data["current_path"] = line.strip()
                     break
     except Exception as e:
-        await message.answer(f"⚠️ Не удалось получить путь: {e}")
+        await message.answer(f"⚠️ Не удалось определить путь: {e}")
 
     data["download_mode"] = True
     await message.answer(
         f"Скачивание из: {data['current_path']}\n"
         "Введите имя файла для загрузки:"
     )
+
 
 
 
@@ -279,17 +278,7 @@ async def process_new_data_or_continue(message: Message):
         data["download_mode"] = False
 
         try:
-            conn, process = active_sessions[uid]
-
-            # 🔄 Тихо обновляем current_path через pwd
-            process.stdin.write("pwd\n")
-            await asyncio.sleep(0.1)
-            output = await process.stdout.read(65536)
-            output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
-            output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
-            if output:
-                data["current_path"] = output
-
+            conn, _ = active_sessions[uid]
             async with conn.start_sftp_client() as sftp:
                 remote_path = f"{data['current_path'].rstrip('/')}/{filename}"
                 local = f"/tmp/{uid}_{filename}"
@@ -299,6 +288,7 @@ async def process_new_data_or_continue(message: Message):
         except Exception as e:
             await message.answer(f"❌ Ошибка: {e}")
         return
+
 
     # Если мы в режиме загрузки, и пришёл документ
     if data.get("upload_mode"):
