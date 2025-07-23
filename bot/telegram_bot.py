@@ -121,6 +121,7 @@ async def tools_handler(message: Message):
 async def back_handler(message: Message):
     await message.answer("Главное меню:", reply_markup=main_kb)
 
+
 @dp.message(F.text == "Скачать из текущ. директории")
 async def start_download_mode(message: Message):
     uid = message.from_user.id
@@ -142,15 +143,29 @@ async def start_download_mode(message: Message):
             # Находим первую строку, похожую на абсолютный путь
             for line in lines:
                 if line.startswith("/"):
+                    # Сохраняем полный путь для операций
                     data["current_path"] = line.strip()
-                    break
 
+                    # Формируем отображаемый путь: удаляем "/root"
+                    if line.startswith("/root/"):
+                        display_path = line[5:]  # удаляем первые 5 символов ("/root")
+                    elif line == "/root":
+                        display_path = "/"
+                    else:
+                        display_path = line
+                    break
+            else:
+                # Если не нашли путь, используем предыдущее значение
+                display_path = data.get("current_path", "unknown")
         except Exception as e:
             await message.answer(f"❌ Не удалось получить путь через pwd: {e}")
+            display_path = data.get("current_path", "unknown")
+    else:
+        display_path = data.get("current_path", "unknown")
 
     data["download_mode"] = True
     await message.answer(
-        f"Скачивание из: {data['current_path']}\n"
+        f"Скачивание из: {display_path}\n"
         "Введите имя файла для загрузки:"
     )
 
