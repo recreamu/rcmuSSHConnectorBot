@@ -130,43 +130,28 @@ async def start_download_mode(message: Message):
     try:
         if uid in active_sessions:
             conn, process = active_sessions[uid]
-
-            # 🔄 Запросим pwd в уже открытом PTY
             process.stdin.write("pwd\n")
             await asyncio.sleep(0.2)
             raw_output = await process.stdout.read(1024)
 
-            # Очистка от ANSI
+            # Чистим ANSI и вывод
             clean = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
-            clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean)
-            lines = clean.strip().splitlines()
+            clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean).strip()
 
-            # Ищем путь
-            for line in lines:
+            # Берём первую строку, начинающуюся с /
+            for line in clean.splitlines():
                 if line.startswith("/"):
-                    full_path = line.strip()
-                    data["current_path"] = full_path  # сохраняем!
-
-                    # Формируем красивое отображение
-                    if full_path.startswith("/root/"):
-                        display_path = full_path[6:]
-                    elif full_path == "/root":
-                        display_path = "."
-                    else:
-                        display_path = full_path
+                    data["current_path"] = line.strip()
                     break
-            else:
-                display_path = data.get("current_path", "unknown")
-
     except Exception as e:
-        await message.answer(f"⚠️ Не удалось определить путь: {e}")
-        display_path = data.get("current_path", "unknown")
+        await message.answer(f"⚠️ Не удалось получить путь: {e}")
 
     data["download_mode"] = True
     await message.answer(
-        f"Скачивание из: {display_path}\n"
+        f"Скачивание из: {data['current_path']}\n"
         "Введите имя файла для загрузки:"
     )
+
 
 
 
