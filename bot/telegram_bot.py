@@ -130,34 +130,33 @@ async def start_download_mode(message: Message):
     try:
         if uid in active_sessions:
             conn, process = active_sessions[uid]
-            async with conn.create_process(term_type="xterm") as p:
-                p.stdin.write("pwd\n")
-                await asyncio.sleep(0.1)
-                raw_output = await p.stdout.read(1024)
 
-                # Удаляем ANSI-последовательности
-                clean = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
-                clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean)
-                lines = clean.strip().splitlines()
+            # 🔄 Запросим pwd в уже открытом PTY
+            process.stdin.write("pwd\n")
+            await asyncio.sleep(0.2)
+            raw_output = await process.stdout.read(1024)
 
-                # Ищем строку с путём
-                for line in lines:
-                    if line.startswith("/"):
-                        full_path = line.strip()
+            # Очистка от ANSI
+            clean = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
+            clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean)
+            lines = clean.strip().splitlines()
 
-                        # Сохраняем текущий путь (для скачивания)
-                        data["current_path"] = full_path
+            # Ищем путь
+            for line in lines:
+                if line.startswith("/"):
+                    full_path = line.strip()
+                    data["current_path"] = full_path  # сохраняем!
 
-                        # Формируем путь для отображения (удаляем /root)
-                        if full_path.startswith("/root/"):
-                            display_path = full_path[6:]
-                        elif full_path == "/root":
-                            display_path = "."
-                        else:
-                            display_path = full_path
-                        break
-                else:
-                    display_path = data.get("current_path", "unknown")
+                    # Формируем красивое отображение
+                    if full_path.startswith("/root/"):
+                        display_path = full_path[6:]
+                    elif full_path == "/root":
+                        display_path = "."
+                    else:
+                        display_path = full_path
+                    break
+            else:
+                display_path = data.get("current_path", "unknown")
 
     except Exception as e:
         await message.answer(f"⚠️ Не удалось определить путь: {e}")
@@ -168,6 +167,7 @@ async def start_download_mode(message: Message):
         f"Скачивание из: {display_path}\n"
         "Введите имя файла для загрузки:"
     )
+
 
 
 
