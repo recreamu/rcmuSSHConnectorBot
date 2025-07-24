@@ -146,6 +146,23 @@ async def start_download_mode(message: Message):
         "Введите имя файла для загрузки:"
     )
 
+    # Если мы в режиме скачивания, и получил не документ, а имя файла:
+    if data.get("download_mode"):
+        filename = message.text.strip()
+        data["download_mode"] = False
+
+        try:
+            conn, _ = active_sessions[uid]
+            async with conn.start_sftp_client() as sftp:
+                remote_path = f"{data['current_path'].rstrip('/')}/{filename}"
+                local = f"/tmp/{uid}_{filename}"
+                await sftp.get(remote_path, local)
+
+            await message.answer_document(FSInputFile(path=local, filename=filename))
+        except Exception as e:
+            await message.answer(f"❌ Ошибка: {e}")
+        return
+
 @dp.message(F.text == "Загрузить в текущ. директорию")
 async def start_upload_mode(message: Message):
     uid = message.from_user.id
@@ -180,6 +197,59 @@ async def start_upload_mode(message: Message):
         f"Загрузка в: {display_path}\n"
         "Оправьте файл в следующем сообщении:"
     )
+
+    # === Обработка загрузки файла ===
+    if data.get("upload_mode") and message.document:
+        data["upload_mode"] = False  # сбрасываем режим в начале
+        uid = message.from_user.id
+        file_name = message.document.file_name
+
+        # Сохраняем документ во временный файл
+        try:
+            downloaded = await bot.download(message.document)
+            local_path = f"/tmp/{uid}_{file_name}"
+            with open(local_path, "wb") as f:
+                f.write(downloaded.read())
+        except Exception as e:
+            return await message.answer(f"❌ Ошибка при загрузке файла: {e}")
+
+        # Проверяем существование на сервере
+        try:
+            conn, _ = active_sessions[uid]
+            async with conn.start_sftp_client() as sftp:
+                remote_path = f"{data['current_path'].rstrip('/')}/{file_name}"
+
+                try:
+                    await sftp.stat(remote_path)  # Проверка: существует ли файл?
+                    # Если существует — спрашиваем подтверждение
+                    pending_uploads[uid] = {
+                        "local_path": local_path,
+                        "remote_path": remote_path,
+                        "file_name": file_name
+                    }
+                    await message.answer(
+                        f"⚠️ Файл `{file_name}` уже существует. Заменить?",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [
+                                InlineKeyboardButton(text="Заменить", callback_data="confirm_upload"),
+                                InlineKeyboardButton(text="Отменить", callback_data="cancel_upload")
+                            ]
+                        ])
+                    )
+                except asyncssh.SFTPNoSuchFile:
+                    # Файл не существует — сразу загружаем
+                    await sftp.put(local_path, remote_path)
+                    await message.answer("✅ Файл загружен.")
+
+        except Exception as e:
+            await message.answer(f"❌ Ошибка при загрузке: {e}")
+
+        return
+
+    # Если в режиме загрузки, но не файл — отмена
+    elif data.get("upload_mode"):
+        data["upload_mode"] = False
+        return await message.answer("Загрузка отменена.")
 
 @dp.callback_query(F.data == "confirm_upload")
 async def confirm_upload_handler(call: CallbackQuery):
@@ -308,75 +378,9 @@ async def process_new_data_or_continue(message: Message):
             reply_markup=get_tools_kb(uid)
         )
 
-    # === загрузка и скачивание ===
-    # Если мы в режиме скачивания, и получил не документ, а имя файла:
-    if data.get("download_mode"):
-        filename = message.text.strip()
-        data["download_mode"] = False
 
-        try:
-            conn, _ = active_sessions[uid]
-            async with conn.start_sftp_client() as sftp:
-                remote_path = f"{data['current_path'].rstrip('/')}/{filename}"
-                local = f"/tmp/{uid}_{filename}"
-                await sftp.get(remote_path, local)
 
-            await message.answer_document(FSInputFile(path=local, filename=filename))
-        except Exception as e:
-            await message.answer(f"❌ Ошибка: {e}")
-        return
 
-    # обработчик загрузки в
-    if data.get("upload_mode"):
-        if not message.document:
-            data["upload_mode"] = False
-            return await message.answer("Загрузка отменена.")
-
-        try:
-            file_info = await bot.get_file(message.document.file_id)
-            file_bytes = await bot.download_file(file_info.file_path)
-
-            with NamedTemporaryFile(delete=False) as tmp_file:
-                tmp_file.write(file_bytes.read())
-                tmp_file_path = tmp_file.name
-
-            conn = active_sessions[uid][0]
-            async with conn.start_sftp_client() as sftp:
-                remote_path = f"{data['current_path'].rstrip('/')}/{message.document.file_name}"
-
-                try:
-                    await sftp.stat(remote_path)
-                    # файл существует — спросим подтверждение
-                    pending_uploads[uid] = {
-                        "local_path": tmp_file_path,
-                        "remote_path": remote_path,
-                        "file_name": message.document.file_name
-                    }
-
-                    kb = InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(text="Заменить", callback_data="confirm_upload"),
-                                InlineKeyboardButton(text="Отменить", callback_data="cancel_upload")
-                            ]
-                        ]
-                    )
-
-                    await message.answer(
-                        f"⚠️ Файл <b>{message.document.file_name}</b> уже существует. Заменить?",
-                        reply_markup=kb,
-                        parse_mode="HTML"
-                    )
-                    return
-                except FileNotFoundError:
-                    # файла нет — загружаем сразу
-                    await sftp.put(tmp_file_path, remote_path)
-                    await message.answer("✅ Файл загружен.")
-        except Exception as e:
-            await message.answer(f"❌ Ошибка: {e}")
-        finally:
-            data["upload_mode"] = False
-        return
 
     # === Обработка SSH‑команд в активном режиме PTY ===
     if data.get("input_mode"):
