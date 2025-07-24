@@ -19,7 +19,9 @@ dp = Dispatcher()
 # ключи: ip, port, username, password, input_mode (bool), editing (bool)
 user_data: dict[int, dict] = {}
 active_sessions = {}  # user_id: SSHClientConnection
-
+pending_commands: dict[int, str] = {}
+pending_uploads: dict[int, dict] = {}  # uid: {"local_path": str, "remote_path": str, "file_name": str}
+BLACKLIST = {'nano', 'vim', 'vi', 'top', 'htop', 'less', 'more'}
 
 # ======== Клавиатуры ========
 main_kb = ReplyKeyboardMarkup(
@@ -35,11 +37,6 @@ edit_button_kb = InlineKeyboardMarkup(
     ]
 )
 
-# список «опасных» команд
-BLACKLIST = {'nano', 'vim', 'vi', 'top', 'htop', 'less', 'more'}
-
-# для хранения «отложенных» команд
-pending_commands: dict[int, str] = {}
 
 # клавиатура для принудительного выполнения
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -184,6 +181,29 @@ async def start_upload_mode(message: Message):
         "Оправьте файл в следующем сообщении:"
     )
 
+@dp.callback_query(F.data == "confirm_upload")
+async def confirm_upload_handler(call: CallbackQuery):
+    uid = call.from_user.id
+    data = pending_uploads.pop(uid, None)
+    await call.answer()
+
+    if not data:
+        return await call.message.answer("⛔ Нечего загружать.")
+
+    try:
+        conn = active_sessions[uid][0]
+        async with conn.start_sftp_client() as sftp:
+            await sftp.put(data["local_path"], data["remote_path"])
+        await call.message.answer("✅ Файл успешно заменён.")
+    except Exception as e:
+        await call.message.answer(f"❌ Ошибка при загрузке: {e}")
+
+@dp.callback_query(F.data == "cancel_upload")
+async def cancel_upload_handler(call: CallbackQuery):
+    uid = call.from_user.id
+    data = pending_uploads.pop(uid, None)
+    await call.answer()
+    await call.message.answer("🚫 Загрузка отменена.")
 
 
 @dp.callback_query(F.data == "force_exec")
@@ -306,8 +326,7 @@ async def process_new_data_or_continue(message: Message):
             await message.answer(f"❌ Ошибка: {e}")
         return
 
-
-    # Если мы в режиме загрузки, и пришёл документ
+    # обработчик загрузки в
     if data.get("upload_mode"):
         if not message.document:
             data["upload_mode"] = False
@@ -324,9 +343,35 @@ async def process_new_data_or_continue(message: Message):
             conn = active_sessions[uid][0]
             async with conn.start_sftp_client() as sftp:
                 remote_path = f"{data['current_path'].rstrip('/')}/{message.document.file_name}"
-                await sftp.put(tmp_file_path, remote_path)
 
-            await message.answer("✅ Файл загружен.")
+                try:
+                    await sftp.stat(remote_path)
+                    # файл существует — спросим подтверждение
+                    pending_uploads[uid] = {
+                        "local_path": tmp_file_path,
+                        "remote_path": remote_path,
+                        "file_name": message.document.file_name
+                    }
+
+                    kb = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(text="Заменить", callback_data="confirm_upload"),
+                                InlineKeyboardButton(text="Отменить", callback_data="cancel_upload")
+                            ]
+                        ]
+                    )
+
+                    await message.answer(
+                        f"⚠️ Файл <b>{message.document.file_name}</b> уже существует. Заменить?",
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                    return
+                except FileNotFoundError:
+                    # файла нет — загружаем сразу
+                    await sftp.put(tmp_file_path, remote_path)
+                    await message.answer("✅ Файл загружен.")
         except Exception as e:
             await message.answer(f"❌ Ошибка: {e}")
         finally:
