@@ -57,7 +57,7 @@ def get_tools_kb(user_id: int) -> ReplyKeyboardMarkup:
                 KeyboardButton(text=input_button_text),
                 KeyboardButton(text="Скачать из текущ. директории"),
                 KeyboardButton(text="Загрузить в текущ. директорию"),
-                KeyboardButton(text="Пусто"),
+                KeyboardButton(text="Скачать директорию"),
             ],
             [KeyboardButton(text="Назад")]
         ],
@@ -123,6 +123,10 @@ async def start_download_mode(message: Message):
     uid = message.from_user.id
     data = user_data[uid]
 
+    # Проверка: режим ввода выключен или нет активной сессии
+    if not data.get("input_mode") or uid not in active_sessions:
+        return await message.answer("⚠️ Сначала включите сессию, чтобы использовать эту функцию.")
+
     try:
         if uid in active_sessions:
             conn, process = active_sessions[uid]
@@ -150,6 +154,10 @@ async def start_download_mode(message: Message):
 async def start_upload_mode(message: Message):
     uid = message.from_user.id
     data = user_data[uid]
+
+    # Проверка: режим ввода выключен или нет активной сессии
+    if not data.get("input_mode") or uid not in active_sessions:
+        return await message.answer("⚠️ Сначала включите сессию, чтобы использовать эту функцию.")
 
     try:
         if uid in active_sessions:
@@ -180,6 +188,91 @@ async def start_upload_mode(message: Message):
         f"Загрузка в: {display_path}\n"
         "Оправьте файл в следующем сообщении:"
     )
+
+@dp.message(F.text == "Скачать директорию")
+async def ask_download_directory(message: Message):
+    uid = message.from_user.id
+    data = user_data.get(uid)
+
+    # Проверка: включён ли input_mode и активна ли сессия
+    if not data.get("input_mode") or uid not in active_sessions:
+        return await message.answer("⚠️ Сначала включите сессию, чтобы использовать эту функцию.")
+
+    try:
+        conn, process = active_sessions[uid]
+        process.stdin.write("pwd\n")
+        await asyncio.sleep(0.1)
+        output = await process.stdout.read(4096)
+        output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
+        output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
+
+        if output:
+            data["current_path"] = output
+            path = output
+        else:
+            path = data.get("current_path", ".")
+
+        # Сохраняем флаг подтверждения
+        data["confirm_dir_download"] = True
+
+        # Клавиатура подтверждения
+        confirm_kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_download_dir"),
+                    InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_download_dir"),
+                ]
+            ]
+        )
+
+        await message.answer(
+            f"📦 Скачивание директории: <code>{path}</code>\nВы уверены?",
+            parse_mode="HTML",
+            reply_markup=confirm_kb
+        )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка определения пути:\n{e}")
+
+@dp.callback_query(F.data == "confirm_download_dir")
+async def confirm_download_dir(callback: CallbackQuery):
+    uid = callback.from_user.id
+    data = user_data.get(uid)
+
+    if not data.get("confirm_dir_download"):
+        return await callback.answer("⚠️ Запрос на скачивание директории не активен.")
+
+    data["confirm_dir_download"] = False  # сбрасываем
+
+    try:
+        conn = active_sessions[uid][0]
+        current_path = data.get("current_path", ".")
+
+        archive_name = f"/tmp/{uid}_dir.tar.gz"
+
+        # Архивируем через SSH
+        result = await conn.run(f"tar -czf {archive_name} -C '{current_path}' .", check=False)
+        if result.stderr:
+            return await callback.message.answer(f"❌ Ошибка архивации:\n{result.stderr}")
+
+        # Скачиваем через SFTP
+        async with conn.start_sftp_client() as sftp:
+            local_path = f"/tmp/{uid}_download.tar.gz"
+            await sftp.get(archive_name, local_path)
+
+        await callback.message.answer_document(FSInputFile(local_path, filename="directory.tar.gz"))
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка при скачивании директории:\n{e}")
+    finally:
+        await callback.answer()
+
+
+@dp.callback_query(F.data == "cancel_download_dir")
+async def cancel_download_dir(callback: CallbackQuery):
+    uid = callback.from_user.id
+    user_data[uid]["confirm_dir_download"] = False
+    await callback.message.answer("❌ Скачивание директории отменено.")
+    await callback.answer()
+
 
 @dp.callback_query(F.data == "confirm_upload")
 async def confirm_upload_handler(call: CallbackQuery):
