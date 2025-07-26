@@ -189,7 +189,7 @@ async def start_upload_mode(message: Message):
         "Оправьте файл в следующем сообщении:"
     )
 
-@dp.message(F.text == "Скачать директорию")
+@dp.message(F.text == "Скачать текущ. директорию")
 async def ask_download_directory(message: Message):
     uid = message.from_user.id
     data = user_data.get(uid)
@@ -202,15 +202,20 @@ async def ask_download_directory(message: Message):
         conn, process = active_sessions[uid]
         process.stdin.write("pwd\n")
         await asyncio.sleep(0.1)
-        output = await process.stdout.read(4096)
-        output = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', output)
-        output = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', output).strip()
+        raw_output = await process.stdout.read(4096)
+        clean = re.sub(r'\x1B\].*?(?:\x07|\x1B\\)', '', raw_output)
+        clean = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', clean)
+        lines = clean.strip().splitlines()
 
-        if output:
-            data["current_path"] = output
-            path = output
+        # Найдём первую строку, которая начинается с /
+        for line in lines:
+            if line.startswith("/"):
+                path = line.strip()
+                break
         else:
             path = data.get("current_path", ".")
+
+        data["current_path"] = path
 
         # Сохраняем флаг подтверждения
         data["confirm_dir_download"] = True
