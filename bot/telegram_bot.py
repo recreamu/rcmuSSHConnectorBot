@@ -57,7 +57,7 @@ def get_tools_kb(user_id: int) -> ReplyKeyboardMarkup:
                 KeyboardButton(text=input_button_text),
                 KeyboardButton(text="Скачать из текущ. директории"),
                 KeyboardButton(text="Загрузить в текущ. директорию"),
-                KeyboardButton(text="Скачать директорию"),
+                KeyboardButton(text="Скачать текущ. директорию"),
             ],
             [KeyboardButton(text="Назад")]
         ],
